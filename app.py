@@ -1,5 +1,6 @@
+import os
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel, Field
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from IndicTransToolkit.processor import IndicProcessor
@@ -166,8 +167,12 @@ def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
 # API endpoints
 # -----------------------
 @app.post("/translate", response_model=TranslationResponse)
-async def translate(request: TranslationRequest):
+async def translate(request: TranslationRequest, x_api_key: str = Header(...)):
     """Translate text from source language to target language"""
+    api_key = os.environ.get("TRANSLATION_API_KEY")
+    if not api_key or x_api_key != api_key:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+
     logger.info(f"Translation request - models_loaded: {state.models_loaded}")
     
     if not state.models_loaded:

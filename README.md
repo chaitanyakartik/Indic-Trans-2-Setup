@@ -61,6 +61,7 @@ Server starts on `http://0.0.0.0:8050`. Model loading takes a few minutes on fir
 
 ### 7. (Optional) Expose via ngrok
 ```bash
+ngrok config add-authtoken YOUR_TOKEN
 ngrok http 8050
 ```
 
