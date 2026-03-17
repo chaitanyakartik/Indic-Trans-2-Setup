@@ -1,10 +1,12 @@
 import os
+import re
 import torch
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel, Field
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from IndicTransToolkit.processor import IndicProcessor
 import logging
+from fastapi.middleware.cors import CORSMiddleware
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +38,17 @@ state = AppState()
 # FastAPI app
 # -----------------------
 app = FastAPI(title="IndicTrans2 Translation API")
+
+
+#Cors fix
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or restrict to specific domains
+    allow_credentials=True,
+    allow_methods=["*"],  # This handles OPTIONS
+    allow_headers=["*"],  # This allows X-API-Key header
+)
+
 
 # -----------------------
 # Load models at startup
@@ -118,23 +131,60 @@ class TranslationResponse(BaseModel):
 # -----------------------
 # Translation function
 # -----------------------
-def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
-    """Simple translation function"""
-    if not state.models_loaded or state.ip is None:
-        raise RuntimeError("Models not loaded yet")
-    
-    # Preprocess
-    batch = state.ip.preprocess_batch(
-        [text],
-        src_lang=src_lang,
-        tgt_lang=tgt_lang
-    )
-    
-    # Get the right model
-    model_key = get_model_key(src_lang, tgt_lang)
-    bundle = state.models[model_key]
-    
-    # Tokenize
+CHUNK_LIMIT = 600  # chars; empirically safe (model truncation seen at ~750-800 chars)
+
+
+def _chunk_text(text: str) -> list:
+    """Chunk at sentence boundaries; word-split any sentence > CHUNK_LIMIT."""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    chunks = []
+    current = []
+    current_len = 0
+
+    for sentence in sentences:
+        s_len = len(sentence)
+
+        if s_len > CHUNK_LIMIT:
+            # Flush any accumulated sentences first
+            if current:
+                chunks.append(' '.join(current))
+                current = []
+                current_len = 0
+            # Word-split the oversized sentence
+            words = sentence.split()
+            sub = []
+            sub_len = 0
+            for word in words:
+                needed = len(word) + (1 if sub else 0)
+                if sub_len + needed > CHUNK_LIMIT:
+                    chunks.append(' '.join(sub))
+                    sub = [word]
+                    sub_len = len(word)
+                else:
+                    sub.append(word)
+                    sub_len += needed
+            if sub:
+                chunks.append(' '.join(sub))
+
+        else:
+            space = 1 if current else 0
+            if current_len + space + s_len <= CHUNK_LIMIT:
+                current.append(sentence)
+                current_len += space + s_len
+            else:
+                chunks.append(' '.join(current))
+                current = [sentence]
+                current_len = s_len
+
+    if current:
+        chunks.append(' '.join(current))
+
+    return chunks
+
+
+def _translate_chunk(chunk: str, src_lang: str, tgt_lang: str, bundle: dict) -> str:
+    """Translate a single chunk."""
+    batch = state.ip.preprocess_batch([chunk], src_lang=src_lang, tgt_lang=tgt_lang)
     inputs = bundle["tokenizer"](
         batch,
         truncation=True,
@@ -142,26 +192,31 @@ def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
         return_tensors="pt",
         return_attention_mask=True
     ).to(DEVICE)
-    
-    # Generate translation
     with torch.no_grad():
-        tokens = bundle["model"].generate(
-            **inputs,
-            max_length=256,
-            num_beams=5
-        )
-    
-    # Decode
+        tokens = bundle["model"].generate(**inputs, max_length=256, num_beams=5)
     decoded = bundle["tokenizer"].batch_decode(
-        tokens,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=True
+        tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True
     )
-    
-    # Postprocess
-    translations = state.ip.postprocess_batch(decoded, lang=tgt_lang)
-    
-    return translations[0]
+    return state.ip.postprocess_batch(decoded, lang=tgt_lang)[0]
+
+
+def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
+    """Translate text of any length by chunking at sentence boundaries."""
+    if not state.models_loaded or state.ip is None:
+        raise RuntimeError("Models not loaded yet")
+
+    model_key = get_model_key(src_lang, tgt_lang)
+    bundle = state.models[model_key]
+
+    chunks = _chunk_text(text)
+    logger.info(f"Translating {len(chunks)} chunk(s) for input of {len(text)} chars")
+
+    translated_chunks = [
+        _translate_chunk(chunk, src_lang, tgt_lang, bundle)
+        for chunk in chunks
+    ]
+
+    return ' '.join(translated_chunks)
 
 # -----------------------
 # API endpoints
@@ -169,7 +224,7 @@ def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
 @app.post("/translate", response_model=TranslationResponse)
 async def translate(request: TranslationRequest, x_api_key: str = Header(...)):
     """Translate text from source language to target language"""
-    api_key = os.environ.get("TRANSLATION_API_KEY")
+    api_key = "gok1-secret#*&%-key"
     if not api_key or x_api_key != api_key:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
 

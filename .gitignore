@@ -1,2 +1,6 @@
 trans-env/
 IndicTransToolkit/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
