@@ -1,38 +1,39 @@
 """
-Test the /translate-pdf endpoint with a scanned PDF.
-Usage: python tests/test_scanned_pdf.py
+Test the /translate-image endpoint with a Kannada image.
+Usage: python tests/test_image.py
 """
+import base64
 import sys
 import time
 import requests
 
 BASE_URL = "http://localhost:8003"
 API_KEY = "gok1-secret#*&%-key"
-PDF_PATH = "tests/test_data/test_kannada_scanned.pdf"
+IMAGE_PATH = "tests/test_data/test_image_kn_2.png"
+
 
 def main():
-    # Health check
     r = requests.get(f"{BASE_URL}/health")
     if r.status_code != 200:
         print(f"Server not ready: {r.status_code} {r.text}")
         sys.exit(1)
     print(f"Server ready: {r.json()}")
 
-    print(f"\nSending scanned PDF: {PDF_PATH}")
+    print(f"\nSending image: {IMAGE_PATH}")
+    with open(IMAGE_PATH, "rb") as f:
+        image_b64 = base64.b64encode(f.read()).decode("ascii")
+
     start = time.monotonic()
-
-    with open(PDF_PATH, "rb") as f:
-        resp = requests.post(
-            f"{BASE_URL}/translate-pdf",
-            headers={"X-API-Key": API_KEY},
-            files={"file": ("test_kannada_scanned.pdf", f, "application/pdf")},
-            data={
-                "source_language": "kan_Knda",
-                "target_language": "eng_Latn",
-            },
-            timeout=300,
-        )
-
+    resp = requests.post(
+        f"{BASE_URL}/translate-image",
+        headers={"X-API-Key": API_KEY, "Content-Type": "application/json"},
+        json={
+            "image_b64": image_b64,
+            "source_language": "kan_Knda",
+            "target_language": "eng_Latn",
+        },
+        timeout=120,
+    )
     elapsed = time.monotonic() - start
 
     print(f"Status : {resp.status_code}  ({elapsed:.1f}s)")
@@ -44,6 +45,7 @@ def main():
     else:
         print("Error:", resp.text)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
