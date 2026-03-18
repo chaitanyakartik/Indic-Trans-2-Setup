@@ -1,0 +1,5 @@
+torch==2.10.0
+transformers==4.56.1
+surya-ocr @ git+https://github.com/datalab-to/surya.git@67c660726bedd1d1ec3d8a834d6bf40bf61dc2b5
+safetensors==0.7.0
+pillow==10.4.0
