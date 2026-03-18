@@ -1,4 +1,8 @@
 cd /home/chaitanya/translation-model/Indic-Trans-2-Setup
 
-source /home/chaitanya/translation-model/trans-env/bin/activate && python -m pytest tests/test_health.py
-       tests/test_pdf.py tests/test_concurrency.py -v -s 2>&1
+source /home/chaitanya/translation-model/trans-env/bin/activate 
+
+source /home/chaitanya/translation-model/Indic-Trans-2-Setup/surya_env/bin/activate
+
+cd /home/chaitanya/translation-model/Indic-Trans-2-Setup/ocr
+python ocr_server.py

@@ -1,195 +1,278 @@
 # IndicTrans2 Translation API
 
-FastAPI server wrapping AI4Bharat's IndicTrans2 models for translation across all 22 scheduled Indian languages.
+FastAPI server wrapping AI4Bharat's IndicTrans2 models for translation across Indian languages, with OCR support for scanned documents and Google Cloud Speech/TTS for audio.
 
 ---
 
-## Folder Structure
+## Architecture
+
+Two services run in separate virtual environments:
+
+| Service | File | venv | Port |
+|---------|------|------|------|
+| Translation API | `main.py` | `trans-env` | 8003 |
+| OCR Service (Surya) | `ocr/ocr_server.py` | `surya_env` | 8010 |
 
 ```
-trans-model/
-├── app.py                  # FastAPI server
+Indic-Trans-2-Setup/
+├── main.py                  # Translation API (FastAPI)
+├── ocr/
+│   └── ocr_server.py        # Surya OCR microservice
+├── helpers/
+│   ├── config.py            # DEVICE, API_KEY, OCR/Google config
+│   ├── state.py             # App state (model handles)
+│   ├── model_loader.py      # Loads IndicTrans2 models into VRAM
+│   ├── translation.py       # Text chunking + batched translation
+│   ├── pdf_utils.py         # PyMuPDF extraction + OCR fallback
+│   ├── audio_utils.py       # ffmpeg conversion, Google STT/TTS
+│   ├── lang_map.py          # IndicTrans2 ↔ Google language code mapping
+│   └── schemas.py           # Pydantic request/response models
+├── tests/
+│   ├── test_scanned_pdf.py
+│   └── load_test.py
+├── keys/
+│   └── gok-ipgrs-voice-sa.json   # Google Cloud service account (not committed)
+├── logs/                    # Server logs (*.txt gitignored)
 ├── requirements.txt
-├── test.py
-├── IndicTransToolkit/      # Cloned from VarunGumma/IndicTransToolkit
-└── trans-env/              # Python venv
+└── surya_requirements.txt
 ```
 
 ---
 
 ## Setup
 
-### 1. Create and activate venv
+### 1. Translation API (trans-env)
+
 ```bash
 python3 -m venv trans-env
 source trans-env/bin/activate
-```
-
-### 2. Install dependencies
-```bash
 pip install -r requirements.txt
 ```
 
-### 3. Install IndicTransToolkit
+Install IndicTransToolkit:
 ```bash
 git clone https://github.com/VarunGumma/IndicTransToolkit
-cd IndicTransToolkit
-pip install -e .
-cd ..
+cd IndicTransToolkit && pip install -e . && cd ..
 ```
-> ⚠️ Note: The old `AI4Bharat/IndicTransToolkit` repo no longer exists. Use `VarunGumma/IndicTransToolkit`.
 
-### 4. HuggingFace login (required — models are gated)
+HuggingFace login (models are gated):
 ```bash
 huggingface-cli login
 ```
-Get your token from https://huggingface.co/settings/tokens, then accept model terms at:
+Accept model terms at:
 - https://huggingface.co/ai4bharat/indictrans2-en-indic-1B
 - https://huggingface.co/ai4bharat/indictrans2-indic-en-1B
 - https://huggingface.co/ai4bharat/indictrans2-indic-indic-1B
 
-### 5. Set API key
+### 2. OCR Service (surya_env)
+
 ```bash
-export TRANSLATION_API_KEY="your-secret-key-here"
+python3 -m venv surya_env
+source surya_env/bin/activate
+pip install -r surya_requirements.txt
 ```
 
-### 6. Run the server
-```bash
-python app.py
-```
-Server starts on `http://0.0.0.0:8050`. Model loading takes a few minutes on first run.
+### 3. Google Cloud credentials (for audio endpoints)
 
-### 7. (Optional) Expose via ngrok
+Place your Google Cloud service account JSON at:
+```
+keys/gok-ipgrs-voice-sa.json
+```
+Or set the environment variable:
 ```bash
-ngrok config add-authtoken YOUR_TOKEN
-ngrok http 8050
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/credentials.json
+```
+
+### 4. Start both services
+
+**Terminal 1 — OCR service:**
+```bash
+source surya_env/bin/activate
+python ocr/ocr_server.py
+```
+
+**Terminal 2 — Translation API:**
+```bash
+source trans-env/bin/activate
+python main.py
+```
+
+Models load into VRAM at startup (takes ~1–2 minutes). Check readiness:
+```bash
+curl http://localhost:8003/health
 ```
 
 ---
 
 ## Authentication
 
-All requests to `/translate` require an `X-API-Key` header:
+All endpoints except `/health` and `/help` require an API key header:
 
 ```
 X-API-Key: your-secret-key-here
 ```
 
-Set the key via the `TRANSLATION_API_KEY` environment variable before starting the server. Requests without a valid key return `403 Forbidden`.
+The key is configured in `helpers/config.py`.
 
 ---
 
 ## API Reference
 
+### `GET /health`
+
+Check server and model readiness. No auth required.
+
+```bash
+curl http://localhost:8003/health
+```
+
+```json
+{"status": "ok", "models_loaded": true, "device": "cuda"}
+```
+
+---
+
 ### `POST /translate`
 
-Translate text between any supported language pair.
+Translate text between any supported language pair. Long text is automatically chunked and batched.
 
-**Headers**
-| Header | Required | Value |
-|--------|----------|-------|
-| `Content-Type` | Yes | `application/json` |
-| `X-API-Key` | Yes | Your API key |
+```bash
+curl -X POST http://localhost:8003/translate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"source_language": "eng_Latn", "target_language": "kan_Knda", "text": "Hello, how are you?"}'
+```
 
-**Request Body**
+**Request**
 ```json
 {
   "source_language": "eng_Latn",
   "target_language": "kan_Knda",
-  "text": "Hello, how are you?"
+  "text": "Input text of any length"
 }
 ```
 
 **Response**
 ```json
-{
-  "translated_text": "ಹಲೋ, ನೀವು ಹೇಗಿದ್ದೀರಿ?"
-}
-```
-
-**Example (curl)**
-```bash
-curl -X POST https://your-ngrok-url/translate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-secret-key-here" \
-  -d '{"source_language": "eng_Latn", "target_language": "hin_Deva", "text": "Good morning"}'
-```
-
-**Example (Python)**
-```python
-import requests
-
-response = requests.post(
-    "https://your-ngrok-url/translate",
-    headers={"X-API-Key": "your-secret-key-here"},
-    json={
-        "source_language": "eng_Latn",
-        "target_language": "hin_Deva",
-        "text": "Good morning"
-    }
-)
-print(response.json()["translated_text"])
+{"translated_text": "ಹಲೋ, ನೀವು ಹೇಗಿದ್ದೀರಿ?"}
 ```
 
 ---
 
-### `GET /health`
+### `POST /translate-pdf`
 
-Check if server and models are ready. No auth required.
+Extract text from a PDF and translate it. Handles both text-layer PDFs and scanned/image PDFs (via OCR — requires the OCR service to be running).
 
 ```bash
-curl https://your-ngrok-url/health
+curl -X POST http://localhost:8003/translate-pdf \
+  -H "X-API-Key: your-key" \
+  -F "file=@document.pdf" \
+  -F "source_language=kan_Knda" \
+  -F "target_language=eng_Latn"
 ```
 
-**Response (ready)**
+**Response**
 ```json
-{"status": "ok", "models_loaded": true, "device": "cuda"}
+{"translated_text": "..."}
 ```
 
-**Response (still loading)**
-```json
-503 - "Models still loading"
+Mixed PDFs (some text pages, some scanned) are handled page-by-page — text pages use PyMuPDF directly, scanned pages go through Surya OCR.
+
+---
+
+### `POST /translate-image`
+
+OCR an image and translate the extracted text. Requires the OCR service to be running.
+
+```bash
+curl -X POST http://localhost:8003/translate-image \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "image_b64": "<base64-encoded image>",
+    "source_language": "kan_Knda",
+    "target_language": "eng_Latn"
+  }'
 ```
+
+**Response**
+```json
+{"translated_text": "..."}
+```
+
+---
+
+### `POST /translate-audio`
+
+Transcribe audio, translate the transcript, and synthesize speech in the target language. Requires Google Cloud credentials.
+
+- Input: any audio format supported by ffmpeg (MP3, OGG, WAV, M4A, etc.)
+- Output: translated text + MP3 audio (base64-encoded)
+
+```bash
+curl -X POST http://localhost:8003/translate-audio \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "audio_b64": "<base64-encoded audio>",
+    "source_language": "kan_Knda",
+    "target_language": "eng_Latn"
+  }'
+```
+
+**Response**
+```json
+{
+  "translated_text": "...",
+  "audio_b64": "<base64-encoded MP3>"
+}
+```
+
+---
+
+### `GET /help`
+
+Returns API documentation and all supported language codes. No auth required.
 
 ---
 
 ## Supported Languages
 
-Language codes follow the **FLORES-200** format: `{language}_{script}`.
+Language codes follow the FLORES-200 format. The audio endpoints (STT/TTS) support the 10 languages below. The translation engine supports all 22 scheduled Indian languages.
 
-| Language | Code |
-|----------|------|
-| English | `eng_Latn` |
-| Hindi | `hin_Deva` |
-| Bengali | `ben_Beng` |
-| Gujarati | `guj_Gujr` |
-| Kannada | `kan_Knda` |
-| Malayalam | `mal_Mlym` |
-| Marathi | `mar_Deva` |
-| Odia | `ory_Orya` |
-| Punjabi | `pan_Guru` |
-| Tamil | `tam_Taml` |
-| Telugu | `tel_Telu` |
-| Urdu | `urd_Arab` |
-| Assamese | `asm_Beng` |
-| Kashmiri (Devanagari) | `kas_Deva` |
-| Kashmiri (Arabic) | `kas_Arab` |
-| Konkani | `gom_Deva` |
-| Maithili | `mai_Deva` |
-| Manipuri (Bengali) | `mni_Beng` |
-| Manipuri (Meitei) | `mni_Mtei` |
-| Nepali | `npi_Deva` |
-| Sanskrit | `san_Deva` |
-| Santali | `sat_Olck` |
-| Sindhi (Devanagari) | `snd_Deva` |
-| Sindhi (Arabic) | `snd_Arab` |
-| Bodo | `brx_Deva` |
-| Dogri | `dgo_Deva` |
+| Language | Code | Audio supported |
+|----------|------|:--------------:|
+| English | `eng_Latn` | Yes |
+| Hindi | `hin_Deva` | Yes |
+| Kannada | `kan_Knda` | Yes |
+| Tamil | `tam_Taml` | Yes |
+| Telugu | `tel_Telu` | Yes |
+| Bengali | `ben_Beng` | Yes |
+| Marathi | `mar_Deva` | Yes |
+| Gujarati | `guj_Gujr` | Yes |
+| Punjabi | `pan_Guru` | Yes |
+| Malayalam | `mal_Mlym` | Yes |
+| Assamese | `asm_Beng` | |
+| Odia | `ory_Orya` | |
+| Urdu | `urd_Arab` | |
+| Sanskrit | `san_Deva` | |
+| ... and more | | |
 
-**Model routing is automatic** based on language pair:
-- `eng_Latn` → any Indic = `en-indic` model
-- any Indic → `eng_Latn` = `indic-en` model
-- Indic → Indic = `indic-indic` model
+Model routing is automatic:
+- `eng_Latn` → Indic: `en-indic` model
+- Indic → `eng_Latn`: `indic-en` model
+- Indic → Indic: `indic-indic` model
+
+---
+
+## Logging
+
+Logs are written to both the terminal and `logs/log.txt` in the format:
+```
+2026-03-18 12:00:00,123 INFO: Page 1: text extracted (342 chars)
+```
+
+The `logs/` directory is tracked in git but `logs/*.txt` files are gitignored.
 
 ---
 
@@ -197,7 +280,7 @@ Language codes follow the **FLORES-200** format: `{language}_{script}`.
 
 | Code | Meaning |
 |------|---------|
-| 400 | Bad request (empty text, unsupported language pair) |
+| 400 | Bad request (empty input, unsupported language pair, OCR returned no text) |
 | 403 | Invalid or missing API key |
-| 500 | Translation failed (check server logs) |
-| 503 | Models still loading — retry in a minute |o
+| 500 | Internal error (check `logs/log.txt`) |
+| 503 | Models still loading, or OCR/audio service unavailable |
