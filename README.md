@@ -83,23 +83,30 @@ Or set the environment variable:
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/credentials.json
 ```
 
-### 4. Start both services
+### 4. Start services (3 tmux windows)
 
-**Terminal 1 — OCR service:**
+**tmux window 1 — OCR service:**
 ```bash
-source surya_env/bin/activate
-python ocr/ocr_server.py
+source /home/chaitanya/translation-model/Indic-Trans-2-Setup/surya_env/bin/activate
+cd /home/chaitanya/translation-model/Indic-Trans-2-Setup/ocr
+python ocr_server.py
 ```
 
-**Terminal 2 — Translation API:**
+**tmux window 2 — Translation API:**
 ```bash
-source trans-env/bin/activate
+source /home/chaitanya/translation-model/trans-env/bin/activate
+cd /home/chaitanya/translation-model/Indic-Trans-2-Setup
 python main.py
 ```
 
 Models load into VRAM at startup (takes ~1–2 minutes). Check readiness:
 ```bash
 curl http://localhost:8003/health
+```
+
+**tmux window 3 — ngrok (to expose publicly):**
+```bash
+ngrok http 8003
 ```
 
 ---
