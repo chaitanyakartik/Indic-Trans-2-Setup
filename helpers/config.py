@@ -16,9 +16,6 @@ CHUNK_LIMIT = 600  # chars; empirically safe (model truncation seen at ~750-800 
 # OCR microservice (runs in surya_env on localhost)
 OCR_SERVICE_URL = os.environ.get("OCR_SERVICE_URL", "http://127.0.0.1:8010")
 OCR_TIMEOUT = int(os.environ.get("OCR_TIMEOUT", "120"))
-# Pages with fewer extracted chars than this AND containing images are sent to OCR
-OCR_TEXT_THRESHOLD = int(os.environ.get("OCR_TEXT_THRESHOLD", "50"))
-
 # Google Cloud credentials for Speech-to-Text and Text-to-Speech
 GOOGLE_CREDENTIALS_PATH = os.environ.get(
     "GOOGLE_APPLICATION_CREDENTIALS",
